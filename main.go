@@ -2,8 +2,10 @@ package main
 
 import (
 	"errors"
+	"flag"
 	"fmt"
 	"log"
+	"os"
 
 	"github.com/google/go-configfs-tsm/configfs/linuxtsm"
 	"github.com/google/go-configfs-tsm/report"
@@ -13,28 +15,29 @@ import (
 	"github.com/veraison/ear"
 )
 
-type TSMEvidenceBuilder struct{}
+func main() {
+	passportCmd := flag.NewFlagSet("passport", flag.ExitOnError)
+	passportName := passportCmd.String("ear", "ear.jwt", "file where the EAR passport is saved")
 
-func (eb TSMEvidenceBuilder) BuildEvidence(nonce []byte, accept []string) ([]byte, string, error) {
-	for _, ct := range accept {
-		if ct == "application/eat-collection; profile=http://arm.com/CCA-SSD/1.0.0" {
-			req := &report.Request{
-				InBlob: nonce,
-			}
+	help := "Available subcommands: 'passport'"
 
-			res, err := linuxtsm.GetReport(req)
-			if err != nil {
-				return nil, "", fmt.Errorf("GetReport failed: %s", err)
-			}
-
-			return res.OutBlob, ct, nil
-		}
+	if len(os.Args) < 2 {
+		fmt.Fprintln(os.Stderr, help)
+		os.Exit(0)
 	}
 
-	return nil, "", errors.New("no match on accepted media types")
+	switch os.Args[1] {
+	case "passport":
+		if err := passportCmd.Parse(os.Args[2:]); err == nil {
+			passport(*passportName)
+		}
+	default:
+		fmt.Fprintln(os.Stderr, help)
+		os.Exit(0)
+	}
 }
 
-func main() {
+func passport(out string) {
 	cfg := verification.ChallengeResponseConfig{
 		NonceSz:         64,
 		EvidenceBuilder: TSMEvidenceBuilder{},
@@ -47,12 +50,20 @@ func main() {
 		log.Fatalf("Veraison API client session failed: %v", err)
 	}
 
-	if err := processAR(ar[1 : len(ar)-1]); err != nil {
+	jwtString := ar[1 : len(ar)-1]
+
+	if err := processEAR(jwtString); err != nil {
 		log.Fatalf("EAR processing failed: %v", err)
 	}
+
+	if err = os.WriteFile(out, jwtString, 0644); err != nil {
+		log.Fatalf("Saving EAR passport to %q failed: %v", out, err)
+	}
+
+	log.Printf("EAR passport saved to %q", out)
 }
 
-func processAR(ares []byte) error {
+func processEAR(ares []byte) error {
 	earVerificationKey := `{
 		"alg": "ES256",
 		"crv": "P-256",
@@ -73,4 +84,25 @@ func processAR(ares []byte) error {
 	fmt.Println(string(j))
 
 	return nil
+}
+
+type TSMEvidenceBuilder struct{}
+
+func (eb TSMEvidenceBuilder) BuildEvidence(nonce []byte, accept []string) ([]byte, string, error) {
+	for _, ct := range accept {
+		if ct == "application/eat-collection; profile=http://arm.com/CCA-SSD/1.0.0" {
+			req := &report.Request{
+				InBlob: nonce,
+			}
+
+			res, err := linuxtsm.GetReport(req)
+			if err != nil {
+				return nil, "", fmt.Errorf("GetReport failed: %s", err)
+			}
+
+			return res.OutBlob, ct, nil
+		}
+	}
+
+	return nil, "", errors.New("no match on accepted media types")
 }
