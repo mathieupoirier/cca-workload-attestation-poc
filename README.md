@@ -23,6 +23,10 @@ Eventually, this project will be added to the buildroot environment of the guest
 
 ### Getting an Attestation Passport
 
+```sh
+mount -t configfs none /sys/kernel/config
+```
+
 In the confidential guest, execute:
 
 ```sh

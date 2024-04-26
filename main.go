@@ -1,6 +1,7 @@
 package main
 
 import (
+	"crypto/rand"
 	"errors"
 	"flag"
 	"fmt"
@@ -12,6 +13,7 @@ import (
 	"github.com/lestrrat-go/jwx/v2/jwa"
 	"github.com/lestrrat-go/jwx/v2/jwk"
 	"github.com/veraison/apiclient/verification"
+	"github.com/veraison/ccatoken"
 	"github.com/veraison/ear"
 )
 
@@ -19,7 +21,9 @@ func main() {
 	passportCmd := flag.NewFlagSet("passport", flag.ExitOnError)
 	passportName := passportCmd.String("ear", "ear.jwt", "file where the EAR passport is saved")
 
-	help := "Available subcommands: 'passport'"
+	_ = flag.NewFlagSet("golden", flag.ExitOnError)
+
+	help := "Available subcommands: 'passport', 'golden'"
 
 	if len(os.Args) < 2 {
 		fmt.Fprintln(os.Stderr, help)
@@ -31,6 +35,8 @@ func main() {
 		if err := passportCmd.Parse(os.Args[2:]); err == nil {
 			passport(*passportName)
 		}
+	case "golden":
+		golden()
 	default:
 		fmt.Fprintln(os.Stderr, help)
 		os.Exit(0)
@@ -91,18 +97,50 @@ type TSMEvidenceBuilder struct{}
 func (eb TSMEvidenceBuilder) BuildEvidence(nonce []byte, accept []string) ([]byte, string, error) {
 	for _, ct := range accept {
 		if ct == "application/eat-collection; profile=http://arm.com/CCA-SSD/1.0.0" {
-			req := &report.Request{
-				InBlob: nonce,
-			}
-
-			res, err := linuxtsm.GetReport(req)
+			evidence, err := getEvidence(nonce)
 			if err != nil {
-				return nil, "", fmt.Errorf("GetReport failed: %s", err)
+				return nil, "", err
 			}
 
-			return res.OutBlob, ct, nil
+			return evidence, ct, nil
 		}
 	}
 
 	return nil, "", errors.New("no match on accepted media types")
+}
+
+func golden() {
+	cbor, err := getEvidence(getRandomNonce())
+	if err != nil {
+		log.Fatalf("getEvidence failed: %v", err)
+	}
+
+	var evidence ccatoken.Evidence
+
+	err = evidence.FromCBOR(cbor)
+	if err != nil {
+		log.Fatalf("Parsing CCA evidence from CBOR failed: %v", err)
+	}
+
+	instID := evidence.GetInstanceID()
+	log.Printf("Instance ID: %x\n", *instID)
+}
+
+func getEvidence(nonce []byte) ([]byte, error) {
+	req := &report.Request{
+		InBlob: nonce,
+	}
+
+	res, err := linuxtsm.GetReport(req)
+	if err != nil {
+		return nil, fmt.Errorf("GetReport failed: %s", err)
+	}
+
+	return res.OutBlob, nil
+}
+
+func getRandomNonce() []byte {
+	nonce := make([]byte, 64)
+	rand.Read(nonce)
+	return nonce
 }
